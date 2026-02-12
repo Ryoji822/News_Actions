@@ -6,8 +6,101 @@ on:
   workflow_dispatch: # 手動実行用
 
 jobs:
-  collect-news:
+  # ========================================
+  # Phase 1: 5つのカテゴリで並列検索 (SubAgent)
+  # ========================================
+  search:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+    strategy:
+      matrix:
+        category:
+          - key: research
+            label: "研究・技術"
+            queries: "AI research paper LLM, machine learning breakthrough, 大規模言語モデル 論文, AI 研究 新手法"
+          - key: product
+            label: "企業・プロダクト"
+            queries: "OpenAI Google DeepMind Anthropic release, AI new product launch, 生成AI 新サービス リリース, AI tool update"
+          - key: funding
+            label: "資金調達・M&A"
+            queries: "AI startup funding round, AI acquisition merger, AI スタートアップ 資金調達, AI企業 買収"
+          - key: policy
+            label: "規制・政策"
+            queries: "AI regulation policy government, AI法規制 政策, EU AI Act, AI safety governance"
+          - key: japan
+            label: "国内ニュース"
+            queries: "日本 AI ニュース, 国内 生成AI 導入, 日本企業 AI活用, AI 日本 政府 方針"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set date variables
+        run: |
+          echo "YESTERDAY=$(date -u -d 'yesterday' +%Y-%m-%d)" >> $GITHUB_ENV
+
+      - name: "Search: ${{ matrix.category.label }}"
+        uses: anomalyco/opencode/github@latest
+        env:
+          Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+        with:
+          model: zai/glm-4.7
+          agent: build
+          prompt: |
+            あなたはAI・生成AIニュース専門の調査エージェントです。
+            担当カテゴリ: **${{ matrix.category.label }}**
+
+            ## タスク
+            Web検索ツールを使い、${{ env.YESTERDAY }} の「${{ matrix.category.label }}」に関する
+            AIニュースを **20件以上** 収集してください。
+
+            ## 検索クエリ
+            以下のクエリを全て検索し、さらに関連するクエリも追加で検索してください：
+            ${{ matrix.category.queries }}
+
+            各クエリに「${{ env.YESTERDAY }}」を付加して検索すること。
+
+            ## 出力
+            ファイルパス: `raw/${{ matrix.category.key }}.md`
+            （ディレクトリがなければ mkdir -p raw で作成）
+
+            以下のフォーマットで全件を書き出してください（順位付け不要、収集した全件を記載）：
+            ```markdown
+            # ${{ matrix.category.label }} - ${{ env.YESTERDAY }}
+
+            ## 1. ニュースタイトル（日本語）
+            - **ソース**: [メディア名](URL)
+            - **日付**: 記事の公開日
+            - **要約**: 2-3文の日本語要約
+            - **重要度**: 高/中/低
+
+            ## 2. ...
+            ```
+
+            ## ルール
+            - 最低20件を目標に収集（多ければ多いほど良い）
+            - 英語記事も日本語に翻訳して記載
+            - 各ニュースには必ずソースURLを含める
+            - ${{ env.YESTERDAY }} 以外の古い記事は除外
+            - 重要度を「高/中/低」で評価
+
+      - name: Upload search results
+        uses: actions/upload-artifact@v4
+        with:
+          name: news-${{ matrix.category.key }}
+          path: raw/
+          retention-days: 1
+
+  # ========================================
+  # Phase 2: 全カテゴリの結果をマージ・キュレーション
+  # ========================================
+  curate:
+    needs: search
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -26,10 +119,25 @@ jobs:
           echo "YESTERDAY=$(date -u -d 'yesterday' +%Y-%m-%d)" >> $GITHUB_ENV
           echo "MONTH_DIR=$(date -u -d 'yesterday' +%Y-%m)" >> $GITHUB_ENV
 
-      - name: Create monthly directory
-        run: mkdir -p news/${{ env.MONTH_DIR }}
+      - name: Create directories
+        run: |
+          mkdir -p news/${{ env.MONTH_DIR }}
+          mkdir -p raw
 
-      - name: Run OpenCode to collect news
+      - name: Download all search results
+        uses: actions/download-artifact@v4
+        with:
+          path: raw/
+          merge-multiple: true
+
+      - name: Show collected data
+        run: |
+          echo "=== Collected files ==="
+          ls -la raw/
+          echo "=== Line counts ==="
+          wc -l raw/*.md 2>/dev/null || echo "No files found"
+
+      - name: "Curate: merge and rank all news"
         uses: anomalyco/opencode/github@latest
         env:
           Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
@@ -37,45 +145,71 @@ jobs:
           model: zai/glm-4.7
           agent: build
           prompt: |
-            あなたはAI・生成AI専門のニュースキュレーターです。
+            あなたはAI・生成AIニュースの編集長です。
 
             ## タスク
-            Web検索ツール(web-search MCP)を使って、${{ env.YESTERDAY }} のAI・生成AI関連の
-            主要ニュースを収集し、Markdownファイルとして保存してください。
+            `raw/` ディレクトリに5つのカテゴリ別ニュース調査結果があります。
+            全ファイルを読み込み、重複を排除・重要度でランキングし、
+            最終的なデイリーニュースレポートを作成してください。
 
             ## 手順
-            1. Web検索で「AI news ${{ env.YESTERDAY }}」「生成AI ニュース ${{ env.YESTERDAY }}」等を検索
-            2. 前日(${{ env.YESTERDAY }})のニュースに絞って5-10件を選定
-            3. 各ニュースを日本語で要約
-            4. 指定フォーマットで news/${{ env.MONTH_DIR }}/${{ env.YESTERDAY }}.md に書き出す
+            1. `raw/` 内の全 .md ファイルを bash の cat コマンドで読み込む
+            2. 重複記事を排除（同じニュースが異なるソースで報じられている場合は統合）
+            3. 重要度「高」を優先し、全体から上位15-20件を厳選
+            4. カテゴリ別に分類して最終レポートを作成
+            5. `news/${{ env.MONTH_DIR }}/${{ env.YESTERDAY }}.md` に書き出す
 
             ## 出力フォーマット
             ```markdown
             # AI News - ${{ env.YESTERDAY }}
 
-            ## 主要ニュース
+            > 調査記事数: XX件 / 掲載: XX件
 
-            ### 1. ニュースタイトル（日本語）
+            ## 🔬 研究・技術
+
+            ### 1. ニュースタイトル
             - **ソース**: [メディア名](URL)
             - **要約**: 2-3文の日本語要約
 
-            ### 2. ニュースタイトル（日本語）
+            ## 🏢 企業・プロダクト
+
+            ### X. ニュースタイトル
+            - **ソース**: [メディア名](URL)
+            - **要約**: 2-3文の日本語要約
+
+            ## 💰 資金調達・M&A
+
+            ### X. ニュースタイトル
+            - **ソース**: [メディア名](URL)
+            - **要約**: 2-3文の日本語要約
+
+            ## 📜 規制・政策
+
+            ### X. ニュースタイトル
+            - **ソース**: [メディア名](URL)
+            - **要約**: 2-3文の日本語要約
+
+            ## 🇯🇵 国内ニュース
+
+            ### X. ニュースタイトル
             - **ソース**: [メディア名](URL)
             - **要約**: 2-3文の日本語要約
 
             ---
 
             ## 本日のトレンド
-            その日のAI業界の主なトレンドや注目ポイントを3-5文で日本語でまとめる。
+            AI業界全体のトレンドを5-8文でまとめる。主要テーマ、注目企業、今後の展望を含める。
             ```
 
             ## ルール
-            - ニュースは5-10件を目安に収集
-            - 英語ニュースも日本語に翻訳して記載
+            - カテゴリに該当記事がない場合はそのカテゴリを省略
+            - 調査記事数と掲載数を冒頭に記載
+            - 全て日本語で記載
             - 各ニュースにはソースURLを必ず含める
-            - 日本語と英語の両方のソースから収集
             - ファイルが既に存在する場合は上書きしない
-            - ディレクトリ news/${{ env.MONTH_DIR }}/ は既に作成済み
+
+      - name: Clean up raw data
+        run: rm -rf raw/
 
       - name: Commit and push
         run: |
