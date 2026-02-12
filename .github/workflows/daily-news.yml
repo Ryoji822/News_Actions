@@ -47,7 +47,7 @@ jobs:
           Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
         run: |
           mkdir -p raw
-          opencode run -q --model zai/glm-4.7 "
+          opencode run --model zai/glm-4.7 "
           あなたはAI・生成AIニュース専門の調査エージェントです。
           担当: ${{ matrix.category.label }}
 
@@ -150,7 +150,7 @@ jobs:
         env:
           Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
         run: |
-          opencode run -q --model zai/glm-4.7 "
+          opencode run --model zai/glm-4.7 "
           あなたはAI・生成AIニュースの編集長です。
 
           ## タスク
