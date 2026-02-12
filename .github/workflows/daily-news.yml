@@ -3,31 +3,70 @@ name: Daily AI News
 on:
   schedule:
     - cron: "30 0 * * *" # 毎日 00:30 UTC = 09:30 JST
-  workflow_dispatch: # 手動実行用
+  workflow_dispatch:
+    inputs:
+      target_date:
+        description: "対象日 (YYYY-MM-DD形式、空欄で前日)"
+        required: false
+        default: ""
+      schedule_cron:
+        description: "参考: cron式の変更はYAML直接編集が必要"
+        required: false
+        default: "30 0 * * * (現在: 毎日09:30 JST)"
 
 jobs:
   # ========================================
-  # Phase 1: 2グループで並列検索 (SubAgent)
+  # Phase 1: 10カテゴリで並列検索 (GLM-4.5)
   # ========================================
   search:
-    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
       contents: write
     strategy:
-      max-parallel: 2
+      max-parallel: 10
+      fail-fast: false
       matrix:
         category:
-          - key: global
-            label: "グローバルAIニュース"
-            queries_en: "AI news, OpenAI Anthropic Google DeepMind, AI product launch, LLM research paper, AI startup funding, AI acquisition merger, AI regulation policy"
-            queries_ja: "生成AI ニュース, AI 新サービス, 大規模言語モデル, AI スタートアップ 資金調達, AI 規制 政策"
-            sites: "https://techcrunch.com/category/artificial-intelligence/, https://venturebeat.com/category/ai/, https://www.theverge.com/ai-artificial-intelligence"
+          - key: llm-models
+            label: "LLM・基盤モデル"
+            queries: "LLM foundation model release, 大規模言語モデル 新モデル, GPT Claude Gemini Llama update"
+            sites: "https://huggingface.co/blog"
+          - key: bigtech
+            label: "Big Tech AI動向"
+            queries: "OpenAI news, Google DeepMind, Anthropic Claude, Meta AI, Microsoft AI, Apple AI"
+            sites: "https://openai.com/blog, https://blog.google/technology/ai/"
+          - key: ai-products
+            label: "AIプロダクト・サービス"
+            queries: "AI product launch, AI tool release, AI SaaS new feature, 生成AI 新サービス リリース"
+            sites: "https://techcrunch.com/category/artificial-intelligence/"
+          - key: research
+            label: "AI研究・論文"
+            queries: "AI research paper, machine learning breakthrough, deep learning advance, AI 研究 論文 新手法"
+            sites: "https://arxiv.org/list/cs.AI/recent"
+          - key: ai-infra
+            label: "AIインフラ・ハードウェア"
+            queries: "AI chip GPU, NVIDIA AI, AI infrastructure cloud, AI半導体 GPU データセンター"
+            sites: "https://www.anandtech.com/"
+          - key: funding
+            label: "AI資金調達・M&A"
+            queries: "AI startup funding round series, AI acquisition merger, AI スタートアップ 資金調達 買収"
+            sites: "https://news.crunchbase.com/"
+          - key: policy
+            label: "AI規制・政策・倫理"
+            queries: "AI regulation policy government, EU AI Act, AI safety governance ethics, AI法規制 政策 倫理"
+            sites: ""
           - key: japan
-            label: "国内AIニュース"
-            queries_en: "Japan AI news, Japanese company AI"
-            queries_ja: "日本 AI ニュース, 国内 生成AI, 日本企業 AI活用, AI 日本 政府, AI業界 動向"
-            sites: "https://www.itmedia.co.jp/aiplus/, https://ledge.ai/, https://ascii.jp/elem/000/004/ai/"
+            label: "日本国内AI"
+            queries: "日本 AI ニュース, 国内 生成AI 導入 事例, 日本企業 AI活用, AI 日本政府 方針"
+            sites: "https://www.itmedia.co.jp/aiplus/, https://ledge.ai/"
+          - key: ai-agents
+            label: "AIエージェント・自動化"
+            queries: "AI agent autonomous, agentic AI, AI automation workflow, AIエージェント 自動化 MCP"
+            sites: ""
+          - key: ai-business
+            label: "AI業界トレンド・分析"
+            queries: "AI industry trend analysis, AI market report, generative AI enterprise adoption, AI業界 動向 市場"
+            sites: "https://venturebeat.com/category/ai/"
 
     steps:
       - name: Checkout repository
@@ -40,19 +79,26 @@ jobs:
 
       - name: Set date variables
         run: |
-          echo "YESTERDAY=$(date -u -d 'yesterday' +%Y-%m-%d)" >> $GITHUB_ENV
+          INPUT_DATE="${{ github.event.inputs.target_date }}"
+          if [ -n "$INPUT_DATE" ]; then
+            echo "YESTERDAY=$INPUT_DATE" >> $GITHUB_ENV
+          else
+            echo "YESTERDAY=$(date -u -d 'yesterday' +%Y-%m-%d)" >> $GITHUB_ENV
+          fi
 
       - name: "Search: ${{ matrix.category.label }}"
         env:
           Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
         run: |
           mkdir -p raw
-          opencode run --model zai/glm-4.7 "
+          opencode run --model zai/glm-4.5 "
           あなたはAI・生成AIニュース専門の調査エージェントです。
-          担当: ${{ matrix.category.label }}
+          担当カテゴリ: **${{ matrix.category.label }}**
+          対象日: ${{ env.YESTERDAY }}
 
           ## タスク
-          ${{ env.YESTERDAY }} のAI関連ニュースを50件以上収集してください。
+          Web検索ツールを使い、${{ env.YESTERDAY }} の「${{ matrix.category.label }}」に関する
+          AIニュースを **10件以上** 収集してください。
 
           ## 重要: web-search ツールの location パラメータ
           web-search_webSearchPrime を呼び出す際:
@@ -60,38 +106,54 @@ jobs:
           - 日本語クエリ → location: \"jp\" を必ず指定
           - 絶対に \"cn\" を使わないこと
 
-          ## 手順
+          ## 検索クエリ
+          以下のクエリに「${{ env.YESTERDAY }}」を付加して検索:
+          ${{ matrix.category.queries }}
 
-          ### Step 1: Web検索 (web-search_webSearchPrime)
-          以下のクエリに ${{ env.YESTERDAY }} を付加して検索:
+          追加で関連するクエリも自分で考えて検索してください。
 
-          英語クエリ (location: us):
-          ${{ matrix.category.queries_en }}
-
-          日本語クエリ (location: jp):
-          ${{ matrix.category.queries_ja }}
-
-          ### Step 2: ニュースサイト直接巡回 (webfetch) ※フォールバック
+          ## フォールバック
           web-search が使えない場合は webfetch で以下を巡回:
           ${{ matrix.category.sites }}
-
-          ### Step 3: 結果をファイルに書き出し
 
           ## 出力
           ファイルパス: raw/${{ matrix.category.key }}.md
 
-          フォーマット:
+          以下のリッチフォーマットで全件を書き出してください:
+
           # ${{ matrix.category.label }} - ${{ env.YESTERDAY }}
 
+          ---
+
           ## 1. ニュースタイトル（日本語）
-          - ソース: [メディア名](URL)
-          - 日付: 記事の公開日
-          - 要約: 2-3文の日本語要約
-          - 重要度: 高/中/低
-          - カテゴリ: 研究・技術 / 企業・プロダクト / 資金調達・M&A / 規制・政策 / 国内
+
+          | 項目 | 内容 |
+          |------|------|
+          | ソース | [メディア名](URL) |
+          | 公開日 | YYYY-MM-DD |
+          | 重要度 | ⭐⭐⭐ / ⭐⭐ / ⭐ |
+
+          ### 概要
+          ニュースの全体像を3-4文で説明。何が起きたのか、誰が関わっているのかを明確に。
+
+          ### 詳細ポイント
+          - ポイント1: 具体的な数字や事実
+          - ポイント2: 技術的な詳細や新規性
+          - ポイント3: 関連する企業・人物
+          - ポイント4: （あれば）競合や市場への影響
+
+          ### なぜ重要か
+          このニュースがAI業界にとってなぜ重要なのかを2-3文で解説。
+
+          ### 関連キーワード
+          キーワード1, キーワード2, キーワード3
+
+          ---
+
+          ## 2. ...
 
           ## ルール
-          - 50件以上を目標に収集
+          - 10件以上を目標に収集
           - 英語記事も日本語に翻訳して記載
           - 各ニュースにはソースURLを必ず含める
           - ${{ env.YESTERDAY }} 以外の古い記事は除外
@@ -99,6 +161,7 @@ jobs:
           "
 
       - name: Upload search results
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: news-${{ matrix.category.key }}
@@ -106,10 +169,11 @@ jobs:
           retention-days: 1
 
   # ========================================
-  # Phase 2: 全結果をマージ・キュレーション → mainに直接コミット
+  # Phase 2: 全結果をマージ・キュレーション
   # ========================================
   curate:
     needs: search
+    if: always()
     runs-on: ubuntu-latest
     permissions:
       contents: write
@@ -125,8 +189,14 @@ jobs:
 
       - name: Set date variables
         run: |
-          echo "YESTERDAY=$(date -u -d 'yesterday' +%Y-%m-%d)" >> $GITHUB_ENV
-          echo "MONTH_DIR=$(date -u -d 'yesterday' +%Y-%m)" >> $GITHUB_ENV
+          INPUT_DATE="${{ github.event.inputs.target_date }}"
+          if [ -n "$INPUT_DATE" ]; then
+            TARGET="$INPUT_DATE"
+          else
+            TARGET="$(date -u -d 'yesterday' +%Y-%m-%d)"
+          fi
+          echo "YESTERDAY=$TARGET" >> $GITHUB_ENV
+          echo "MONTH_DIR=$(echo $TARGET | cut -d- -f1-2)" >> $GITHUB_ENV
 
       - name: Create directories
         run: |
@@ -142,7 +212,7 @@ jobs:
       - name: Show collected data
         run: |
           echo "=== Collected files ==="
-          ls -la raw/
+          ls -la raw/ 2>/dev/null || echo "No raw directory"
           echo "=== Line counts ==="
           wc -l raw/*.md 2>/dev/null || echo "No files found"
 
@@ -150,18 +220,18 @@ jobs:
         env:
           Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
         run: |
-          opencode run --model zai/glm-4.7 "
+          opencode run --model zai/glm-4.5 "
           あなたはAI・生成AIニュースの編集長です。
 
           ## タスク
-          raw/ ディレクトリにニュース調査結果があります。
+          raw/ ディレクトリに10カテゴリ分のニュース調査結果があります。
           全ファイルを読み込み、重複を排除・重要度でランキングし、
           最終的なデイリーニュースレポートを作成してください。
 
           ## 手順
           1. raw/ 内の全 .md ファイルを bash の cat コマンドで読み込む
           2. 重複記事を排除（同じニュースが異なるソースで報じられている場合は統合）
-          3. 重要度「高」を優先し、全体から上位15-20件を厳選
+          3. 重要度⭐⭐⭐を優先し、全体から上位15-25件を厳選
           4. カテゴリ別に分類して最終レポートを作成
           5. news/${{ env.MONTH_DIR }}/${{ env.YESTERDAY }}.md に書き出す
 
@@ -169,46 +239,57 @@ jobs:
 
           # AI News - ${{ env.YESTERDAY }}
 
-          > 調査記事数: XX件 / 掲載: XX件
+          > 🔍 調査カテゴリ: 10 / 調査記事数: XX件 / 掲載: XX件
+
+          ---
 
           ## 🔬 研究・技術
 
           ### 1. ニュースタイトル
-          - **ソース**: [メディア名](URL)
-          - **要約**: 2-3文の日本語要約
 
-          ## 🏢 企業・プロダクト
+          | 項目 | 内容 |
+          |------|------|
+          | ソース | [メディア名](URL) |
+          | 重要度 | ⭐⭐⭐ |
 
-          ### X. ニュースタイトル
-          - **ソース**: [メディア名](URL)
-          - **要約**: 2-3文の日本語要約
+          **概要**: ニュースの全体像を3-4文で説明。
 
-          ## 💰 資金調達・M&A
+          **詳細ポイント**:
+          - ポイント1
+          - ポイント2
+          - ポイント3
 
-          ### X. ニュースタイトル
-          - **ソース**: [メディア名](URL)
-          - **要約**: 2-3文の日本語要約
+          **なぜ重要か**: このニュースの意義を2-3文で解説。
 
-          ## 📜 規制・政策
-
-          ### X. ニュースタイトル
-          - **ソース**: [メディア名](URL)
-          - **要約**: 2-3文の日本語要約
-
-          ## 🇯🇵 国内ニュース
-
-          ### X. ニュースタイトル
-          - **ソース**: [メディア名](URL)
-          - **要約**: 2-3文の日本語要約
+          **関連キーワード**: キーワード1, キーワード2, キーワード3
 
           ---
 
-          ## 本日のトレンド
-          AI業界全体のトレンドを5-8文でまとめる。主要テーマ、注目企業、今後の展望を含める。
+          ## 🏢 企業・プロダクト
+          （同じフォーマットで続く）
+
+          ## 💰 資金調達・M&A
+          ## 📜 規制・政策・倫理
+          ## 🇯🇵 国内ニュース
+          ## 🤖 AIエージェント・自動化
+          ## 🖥️ インフラ・ハードウェア
+
+          ---
+
+          ## 📊 本日のトレンド分析
+
+          ### 主要テーマ
+          今日のAI業界を貫く主要テーマを3-5つ挙げて各2-3文で解説。
+
+          ### 注目企業・組織
+          今日特に動きがあった企業や組織をリストアップして概要を記載。
+
+          ### 今後の展望
+          今日のニュースから予測される今後の動向を3-5文でまとめる。
 
           ## ルール
           - カテゴリに該当記事がない場合はそのカテゴリを省略
-          - 調査記事数と掲載数を冒頭に記載
+          - 調査カテゴリ数・記事数・掲載数を冒頭に記載
           - 全て日本語で記載
           - 各ニュースにはソースURLを必ず含める
           - ファイルが既に存在する場合は上書きしない
