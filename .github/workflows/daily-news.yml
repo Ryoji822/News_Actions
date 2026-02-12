@@ -7,32 +7,27 @@ on:
 
 jobs:
   # ========================================
-  # Phase 1: 5つのカテゴリで並列検索 (SubAgent)
+  # Phase 1: 2グループで並列検索 (SubAgent)
   # ========================================
   search:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: write
     strategy:
+      max-parallel: 2
       matrix:
         category:
-          - key: research
-            label: "研究・技術"
-            queries: "AI research paper LLM, machine learning breakthrough, 大規模言語モデル 論文, AI 研究 新手法"
-          - key: product
-            label: "企業・プロダクト"
-            queries: "OpenAI Google DeepMind Anthropic release, AI new product launch, 生成AI 新サービス リリース, AI tool update"
-          - key: funding
-            label: "資金調達・M&A"
-            queries: "AI startup funding round, AI acquisition merger, AI スタートアップ 資金調達, AI企業 買収"
-          - key: policy
-            label: "規制・政策"
-            queries: "AI regulation policy government, AI法規制 政策, EU AI Act, AI safety governance"
+          - key: global
+            label: "グローバルAIニュース"
+            queries_en: "AI news, OpenAI Anthropic Google DeepMind, AI product launch, LLM research paper, AI startup funding, AI acquisition merger, AI regulation policy"
+            queries_ja: "生成AI ニュース, AI 新サービス, 大規模言語モデル, AI スタートアップ 資金調達, AI 規制 政策"
+            sites: "https://techcrunch.com/category/artificial-intelligence/, https://venturebeat.com/category/ai/, https://www.theverge.com/ai-artificial-intelligence"
           - key: japan
-            label: "国内ニュース"
-            queries: "日本 AI ニュース, 国内 生成AI 導入, 日本企業 AI活用, AI 日本 政府 方針"
+            label: "国内AIニュース"
+            queries_en: "Japan AI news, Japanese company AI"
+            queries_ja: "日本 AI ニュース, 国内 生成AI, 日本企業 AI活用, AI 日本 政府, AI業界 動向"
+            sites: "https://www.itmedia.co.jp/aiplus/, https://ledge.ai/, https://ascii.jp/elem/000/004/ai/"
 
     steps:
       - name: Checkout repository
@@ -40,54 +35,68 @@ jobs:
         with:
           fetch-depth: 1
 
+      - name: Install OpenCode
+        run: curl -fsSL https://opencode.ai/install | bash
+
       - name: Set date variables
         run: |
           echo "YESTERDAY=$(date -u -d 'yesterday' +%Y-%m-%d)" >> $GITHUB_ENV
 
       - name: "Search: ${{ matrix.category.label }}"
-        uses: anomalyco/opencode/github@latest
         env:
           Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
-        with:
-          model: zai/glm-4.7
-          agent: build
-          prompt: |
-            あなたはAI・生成AIニュース専門の調査エージェントです。
-            担当カテゴリ: **${{ matrix.category.label }}**
+        run: |
+          mkdir -p raw
+          opencode run -q --model zai/glm-4.7 "
+          あなたはAI・生成AIニュース専門の調査エージェントです。
+          担当: ${{ matrix.category.label }}
 
-            ## タスク
-            Web検索ツールを使い、${{ env.YESTERDAY }} の「${{ matrix.category.label }}」に関する
-            AIニュースを **20件以上** 収集してください。
+          ## タスク
+          ${{ env.YESTERDAY }} のAI関連ニュースを50件以上収集してください。
 
-            ## 検索クエリ
-            以下のクエリを全て検索し、さらに関連するクエリも追加で検索してください：
-            ${{ matrix.category.queries }}
+          ## 重要: web-search ツールの location パラメータ
+          web-search_webSearchPrime を呼び出す際:
+          - 英語クエリ → location: \"us\" を必ず指定
+          - 日本語クエリ → location: \"jp\" を必ず指定
+          - 絶対に \"cn\" を使わないこと
 
-            各クエリに「${{ env.YESTERDAY }}」を付加して検索すること。
+          ## 手順
 
-            ## 出力
-            ファイルパス: `raw/${{ matrix.category.key }}.md`
-            （ディレクトリがなければ mkdir -p raw で作成）
+          ### Step 1: Web検索 (web-search_webSearchPrime)
+          以下のクエリに ${{ env.YESTERDAY }} を付加して検索:
 
-            以下のフォーマットで全件を書き出してください（順位付け不要、収集した全件を記載）：
-            ```markdown
-            # ${{ matrix.category.label }} - ${{ env.YESTERDAY }}
+          英語クエリ (location: us):
+          ${{ matrix.category.queries_en }}
 
-            ## 1. ニュースタイトル（日本語）
-            - **ソース**: [メディア名](URL)
-            - **日付**: 記事の公開日
-            - **要約**: 2-3文の日本語要約
-            - **重要度**: 高/中/低
+          日本語クエリ (location: jp):
+          ${{ matrix.category.queries_ja }}
 
-            ## 2. ...
-            ```
+          ### Step 2: ニュースサイト直接巡回 (webfetch) ※フォールバック
+          web-search が使えない場合は webfetch で以下を巡回:
+          ${{ matrix.category.sites }}
 
-            ## ルール
-            - 最低20件を目標に収集（多ければ多いほど良い）
-            - 英語記事も日本語に翻訳して記載
-            - 各ニュースには必ずソースURLを含める
-            - ${{ env.YESTERDAY }} 以外の古い記事は除外
-            - 重要度を「高/中/低」で評価
+          ### Step 3: 結果をファイルに書き出し
+
+          ## 出力
+          ファイルパス: raw/${{ matrix.category.key }}.md
+
+          フォーマット:
+          # ${{ matrix.category.label }} - ${{ env.YESTERDAY }}
+
+          ## 1. ニュースタイトル（日本語）
+          - ソース: [メディア名](URL)
+          - 日付: 記事の公開日
+          - 要約: 2-3文の日本語要約
+          - 重要度: 高/中/低
+          - カテゴリ: 研究・技術 / 企業・プロダクト / 資金調達・M&A / 規制・政策 / 国内
+
+          ## ルール
+          - 50件以上を目標に収集
+          - 英語記事も日本語に翻訳して記載
+          - 各ニュースにはソースURLを必ず含める
+          - ${{ env.YESTERDAY }} 以外の古い記事は除外
+          - web-search が途中で使えなくなったら webfetch に切り替えて続行
+          "
 
       - name: Upload search results
         uses: actions/upload-artifact@v4
@@ -97,22 +106,22 @@ jobs:
           retention-days: 1
 
   # ========================================
-  # Phase 2: 全カテゴリの結果をマージ・キュレーション
+  # Phase 2: 全結果をマージ・キュレーション → mainに直接コミット
   # ========================================
   curate:
     needs: search
     runs-on: ubuntu-latest
     permissions:
-      id-token: write
       contents: write
-      pull-requests: write
-      issues: write
 
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
         with:
           fetch-depth: 1
+
+      - name: Install OpenCode
+        run: curl -fsSL https://opencode.ai/install | bash
 
       - name: Set date variables
         run: |
@@ -138,75 +147,72 @@ jobs:
           wc -l raw/*.md 2>/dev/null || echo "No files found"
 
       - name: "Curate: merge and rank all news"
-        uses: anomalyco/opencode/github@latest
         env:
           Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
-        with:
-          model: zai/glm-4.7
-          agent: build
-          prompt: |
-            あなたはAI・生成AIニュースの編集長です。
+        run: |
+          opencode run -q --model zai/glm-4.7 "
+          あなたはAI・生成AIニュースの編集長です。
 
-            ## タスク
-            `raw/` ディレクトリに5つのカテゴリ別ニュース調査結果があります。
-            全ファイルを読み込み、重複を排除・重要度でランキングし、
-            最終的なデイリーニュースレポートを作成してください。
+          ## タスク
+          raw/ ディレクトリにニュース調査結果があります。
+          全ファイルを読み込み、重複を排除・重要度でランキングし、
+          最終的なデイリーニュースレポートを作成してください。
 
-            ## 手順
-            1. `raw/` 内の全 .md ファイルを bash の cat コマンドで読み込む
-            2. 重複記事を排除（同じニュースが異なるソースで報じられている場合は統合）
-            3. 重要度「高」を優先し、全体から上位15-20件を厳選
-            4. カテゴリ別に分類して最終レポートを作成
-            5. `news/${{ env.MONTH_DIR }}/${{ env.YESTERDAY }}.md` に書き出す
+          ## 手順
+          1. raw/ 内の全 .md ファイルを bash の cat コマンドで読み込む
+          2. 重複記事を排除（同じニュースが異なるソースで報じられている場合は統合）
+          3. 重要度「高」を優先し、全体から上位15-20件を厳選
+          4. カテゴリ別に分類して最終レポートを作成
+          5. news/${{ env.MONTH_DIR }}/${{ env.YESTERDAY }}.md に書き出す
 
-            ## 出力フォーマット
-            ```markdown
-            # AI News - ${{ env.YESTERDAY }}
+          ## 出力フォーマット
 
-            > 調査記事数: XX件 / 掲載: XX件
+          # AI News - ${{ env.YESTERDAY }}
 
-            ## 🔬 研究・技術
+          > 調査記事数: XX件 / 掲載: XX件
 
-            ### 1. ニュースタイトル
-            - **ソース**: [メディア名](URL)
-            - **要約**: 2-3文の日本語要約
+          ## 🔬 研究・技術
 
-            ## 🏢 企業・プロダクト
+          ### 1. ニュースタイトル
+          - **ソース**: [メディア名](URL)
+          - **要約**: 2-3文の日本語要約
 
-            ### X. ニュースタイトル
-            - **ソース**: [メディア名](URL)
-            - **要約**: 2-3文の日本語要約
+          ## 🏢 企業・プロダクト
 
-            ## 💰 資金調達・M&A
+          ### X. ニュースタイトル
+          - **ソース**: [メディア名](URL)
+          - **要約**: 2-3文の日本語要約
 
-            ### X. ニュースタイトル
-            - **ソース**: [メディア名](URL)
-            - **要約**: 2-3文の日本語要約
+          ## 💰 資金調達・M&A
 
-            ## 📜 規制・政策
+          ### X. ニュースタイトル
+          - **ソース**: [メディア名](URL)
+          - **要約**: 2-3文の日本語要約
 
-            ### X. ニュースタイトル
-            - **ソース**: [メディア名](URL)
-            - **要約**: 2-3文の日本語要約
+          ## 📜 規制・政策
 
-            ## 🇯🇵 国内ニュース
+          ### X. ニュースタイトル
+          - **ソース**: [メディア名](URL)
+          - **要約**: 2-3文の日本語要約
 
-            ### X. ニュースタイトル
-            - **ソース**: [メディア名](URL)
-            - **要約**: 2-3文の日本語要約
+          ## 🇯🇵 国内ニュース
 
-            ---
+          ### X. ニュースタイトル
+          - **ソース**: [メディア名](URL)
+          - **要約**: 2-3文の日本語要約
 
-            ## 本日のトレンド
-            AI業界全体のトレンドを5-8文でまとめる。主要テーマ、注目企業、今後の展望を含める。
-            ```
+          ---
 
-            ## ルール
-            - カテゴリに該当記事がない場合はそのカテゴリを省略
-            - 調査記事数と掲載数を冒頭に記載
-            - 全て日本語で記載
-            - 各ニュースにはソースURLを必ず含める
-            - ファイルが既に存在する場合は上書きしない
+          ## 本日のトレンド
+          AI業界全体のトレンドを5-8文でまとめる。主要テーマ、注目企業、今後の展望を含める。
+
+          ## ルール
+          - カテゴリに該当記事がない場合はそのカテゴリを省略
+          - 調査記事数と掲載数を冒頭に記載
+          - 全て日本語で記載
+          - 各ニュースにはソースURLを必ず含める
+          - ファイルが既に存在する場合は上書きしない
+          "
 
       - name: Clean up raw data
         run: rm -rf raw/
