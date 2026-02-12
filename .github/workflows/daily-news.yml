@@ -1,0 +1,90 @@
+name: Daily AI News
+
+on:
+  schedule:
+    - cron: "30 0 * * *" # 毎日 00:30 UTC = 09:30 JST
+  workflow_dispatch: # 手動実行用
+
+jobs:
+  collect-news:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write
+      contents: write
+      pull-requests: write
+      issues: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 1
+
+      - name: Set date variables
+        run: |
+          echo "YESTERDAY=$(date -u -d 'yesterday' +%Y-%m-%d)" >> $GITHUB_ENV
+          echo "MONTH_DIR=$(date -u -d 'yesterday' +%Y-%m)" >> $GITHUB_ENV
+
+      - name: Create monthly directory
+        run: mkdir -p news/${{ env.MONTH_DIR }}
+
+      - name: Run OpenCode to collect news
+        uses: anomalyco/opencode/github@latest
+        env:
+          Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
+        with:
+          model: zai/glm-4.7
+          agent: build
+          prompt: |
+            あなたはAI・生成AI専門のニュースキュレーターです。
+
+            ## タスク
+            ${{ env.YESTERDAY }} のAI・生成AI関連の主要ニュースをWeb検索で収集し、
+            Markdownファイルとして保存してください。
+
+            ## 出力先
+            ファイルパス: news/${{ env.MONTH_DIR }}/${{ env.YESTERDAY }}.md
+
+            ## 出力フォーマット
+            以下のMarkdownフォーマットで書き出してください：
+
+            ```
+            # AI News - ${{ env.YESTERDAY }}
+
+            ## 主要ニュース
+
+            ### 1. [ニュースタイトル]
+            - **ソース**: [メディア名](URL)
+            - **要約**: 2-3文の要約
+
+            ### 2. [ニュースタイトル]
+            - **ソース**: [メディア名](URL)
+            - **要約**: 2-3文の要約
+
+            （5-10件）
+
+            ---
+
+            ## 本日のトレンド
+            その日のAI業界の主なトレンドや注目ポイントを3-5文でまとめる。
+            ```
+
+            ## ルール
+            - ニュースは5-10件を目安に収集
+            - 各ニュースにはソースURLを必ず含める
+            - 日本語と英語の両方のソースから収集
+            - ファイルが既に存在する場合は上書きしない
+            - ディレクトリ news/${{ env.MONTH_DIR }}/ は既に作成済み
+
+      - name: Commit and push
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add news/
+          if git diff --cached --quiet; then
+            echo "No new news files to commit"
+          else
+            git commit -m "📰 AI News: ${{ env.YESTERDAY }}"
+            git push
+          fi
