@@ -9,14 +9,11 @@ on:
         description: "対象日 (YYYY-MM-DD形式、空欄で前日)"
         required: false
         default: ""
-      schedule_cron:
-        description: "参考: cron式の変更はYAML直接編集が必要"
-        required: false
-        default: "30 0 * * * (現在: 毎日09:30 JST)"
 
 jobs:
   # ========================================
   # Phase 1: 10カテゴリで並列検索 (GLM-4.5)
+  # webfetchメイン + web-search補足(1回/カテゴリ)
   # ========================================
   search:
     runs-on: ubuntu-latest
@@ -29,44 +26,44 @@ jobs:
         category:
           - key: llm-models
             label: "LLM・基盤モデル"
-            queries: "LLM foundation model release, 大規模言語モデル 新モデル, GPT Claude Gemini Llama update"
-            sites: "https://huggingface.co/blog"
+            sites: "https://huggingface.co/blog, https://openai.com/blog, https://www.anthropic.com/news"
+            search_query: "LLM new model release foundation model"
           - key: bigtech
             label: "Big Tech AI動向"
-            queries: "OpenAI news, Google DeepMind, Anthropic Claude, Meta AI, Microsoft AI, Apple AI"
-            sites: "https://openai.com/blog, https://blog.google/technology/ai/"
+            sites: "https://blog.google/technology/ai/, https://openai.com/blog, https://www.anthropic.com/news, https://ai.meta.com/blog/"
+            search_query: "OpenAI Google DeepMind Anthropic Meta Microsoft AI announcement"
           - key: ai-products
             label: "AIプロダクト・サービス"
-            queries: "AI product launch, AI tool release, AI SaaS new feature, 生成AI 新サービス リリース"
-            sites: "https://techcrunch.com/category/artificial-intelligence/"
+            sites: "https://techcrunch.com/category/artificial-intelligence/, https://www.producthunt.com/topics/artificial-intelligence"
+            search_query: "AI product launch new tool service release"
           - key: research
             label: "AI研究・論文"
-            queries: "AI research paper, machine learning breakthrough, deep learning advance, AI 研究 論文 新手法"
-            sites: "https://arxiv.org/list/cs.AI/recent"
+            sites: "https://arxiv.org/list/cs.AI/recent, https://www.technologyreview.com/topic/artificial-intelligence/"
+            search_query: "AI research paper breakthrough machine learning"
           - key: ai-infra
             label: "AIインフラ・ハードウェア"
-            queries: "AI chip GPU, NVIDIA AI, AI infrastructure cloud, AI半導体 GPU データセンター"
-            sites: "https://www.anandtech.com/"
+            sites: "https://www.tomshardware.com/tag/ai, https://www.reuters.com/technology/artificial-intelligence/"
+            search_query: "AI chip GPU NVIDIA data center infrastructure"
           - key: funding
             label: "AI資金調達・M&A"
-            queries: "AI startup funding round series, AI acquisition merger, AI スタートアップ 資金調達 買収"
-            sites: "https://news.crunchbase.com/"
+            sites: "https://news.crunchbase.com/ai/, https://www.bloomberg.com/technology"
+            search_query: "AI startup funding series acquisition merger"
           - key: policy
             label: "AI規制・政策・倫理"
-            queries: "AI regulation policy government, EU AI Act, AI safety governance ethics, AI法規制 政策 倫理"
-            sites: ""
+            sites: "https://www.wired.com/tag/artificial-intelligence/, https://arstechnica.com/ai/"
+            search_query: "AI regulation policy safety governance ethics"
           - key: japan
             label: "日本国内AI"
-            queries: "日本 AI ニュース, 国内 生成AI 導入 事例, 日本企業 AI活用, AI 日本政府 方針"
-            sites: "https://www.itmedia.co.jp/aiplus/, https://ledge.ai/"
+            sites: "https://www.itmedia.co.jp/aiplus/, https://ledge.ai/, https://ascii.jp/elem/000/004/ai/, https://www.watch.impress.co.jp/category/ai/"
+            search_query: "日本 AI 生成AI ニュース 企業 導入"
           - key: ai-agents
             label: "AIエージェント・自動化"
-            queries: "AI agent autonomous, agentic AI, AI automation workflow, AIエージェント 自動化 MCP"
-            sites: ""
+            sites: "https://venturebeat.com/category/ai/, https://the-decoder.com/"
+            search_query: "AI agent autonomous agentic workflow automation MCP"
           - key: ai-business
-            label: "AI業界トレンド・分析"
-            queries: "AI industry trend analysis, AI market report, generative AI enterprise adoption, AI業界 動向 市場"
-            sites: "https://venturebeat.com/category/ai/"
+            label: "AI業界トレンド"
+            sites: "https://www.theverge.com/ai-artificial-intelligence, https://www.cnbc.com/artificial-intelligence/"
+            search_query: "AI industry trend market enterprise adoption generative AI"
 
     steps:
       - name: Checkout repository
@@ -97,24 +94,27 @@ jobs:
           対象日: ${{ env.YESTERDAY }}
 
           ## タスク
-          Web検索ツールを使い、${{ env.YESTERDAY }} の「${{ matrix.category.label }}」に関する
-          AIニュースを **10件以上** 収集してください。
+          対象日のAI関連ニュースを10件以上収集してください。
 
-          ## 重要: web-search ツールの location パラメータ
-          web-search_webSearchPrime を呼び出す際:
-          - 英語クエリ → location: \"us\" を必ず指定
-          - 日本語クエリ → location: \"jp\" を必ず指定
-          - 絶対に \"cn\" を使わないこと
+          ## 手順（この順番で実行すること）
 
-          ## 検索クエリ
-          以下のクエリに「${{ env.YESTERDAY }}」を付加して検索:
-          ${{ matrix.category.queries }}
-
-          追加で関連するクエリも自分で考えて検索してください。
-
-          ## フォールバック
-          web-search が使えない場合は webfetch で以下を巡回:
+          ### Step 1: ニュースサイト巡回（メイン・webfetch使用）
+          以下のサイトをwebfetchで巡回し、${{ env.YESTERDAY }} の記事を収集:
           ${{ matrix.category.sites }}
+
+          各サイトのページから記事タイトルとURLを抽出し、
+          関連性の高い記事はさらにwebfetchで個別記事を読んで詳細を取得。
+
+          ### Step 2: Web検索で補足（1回のみ・web-search使用）
+          web-search_webSearchPrime を **1回だけ** 呼び出し、
+          Step 1で拾えなかったニュースを補足:
+          - search_query: \"${{ matrix.category.search_query }} ${{ env.YESTERDAY }}\"
+          - location: \"us\"（日本国内カテゴリの場合は \"jp\"）
+          - search_recency_filter: \"oneDay\"
+          - 絶対に location を \"cn\" にしないこと
+          - **web-searchは節約のため1回のみ。2回以上呼ばないこと。**
+
+          ### Step 3: 結果をファイルに書き出し
 
           ## 出力
           ファイルパス: raw/${{ matrix.category.key }}.md
@@ -134,13 +134,12 @@ jobs:
           | 重要度 | ⭐⭐⭐ / ⭐⭐ / ⭐ |
 
           ### 概要
-          ニュースの全体像を3-4文で説明。何が起きたのか、誰が関わっているのかを明確に。
+          ニュースの全体像を3-4文で説明。
 
           ### 詳細ポイント
           - ポイント1: 具体的な数字や事実
           - ポイント2: 技術的な詳細や新規性
           - ポイント3: 関連する企業・人物
-          - ポイント4: （あれば）競合や市場への影響
 
           ### なぜ重要か
           このニュースがAI業界にとってなぜ重要なのかを2-3文で解説。
@@ -157,7 +156,7 @@ jobs:
           - 英語記事も日本語に翻訳して記載
           - 各ニュースにはソースURLを必ず含める
           - ${{ env.YESTERDAY }} 以外の古い記事は除外
-          - web-search が途中で使えなくなったら webfetch に切り替えて続行
+          - web-search が使えない場合は webfetch のみで続行
           "
 
       - name: Upload search results
@@ -266,7 +265,7 @@ jobs:
           ---
 
           ## 🏢 企業・プロダクト
-          （同じフォーマットで続く）
+          （同じフォーマット）
 
           ## 💰 資金調達・M&A
           ## 📜 規制・政策・倫理
@@ -282,7 +281,7 @@ jobs:
           今日のAI業界を貫く主要テーマを3-5つ挙げて各2-3文で解説。
 
           ### 注目企業・組織
-          今日特に動きがあった企業や組織をリストアップして概要を記載。
+          今日特に動きがあった企業や組織をリストアップ。
 
           ### 今後の展望
           今日のニュースから予測される今後の動向を3-5文でまとめる。
