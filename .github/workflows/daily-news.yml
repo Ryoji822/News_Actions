@@ -83,7 +83,7 @@ jobs:
           if [ -n "$INPUT_DATE" ]; then
             echo "YESTERDAY=$INPUT_DATE" >> $GITHUB_ENV
           else
-            echo "YESTERDAY=$(date -u -d 'yesterday' +%Y-%m-%d)" >> $GITHUB_ENV
+            echo "YESTERDAY=$(TZ='Asia/Tokyo' date -d 'yesterday' +%Y-%m-%d)" >> $GITHUB_ENV
           fi
 
       - name: "Search: ${{ matrix.category.label }}"
@@ -193,7 +193,7 @@ jobs:
           if [ -n "$INPUT_DATE" ]; then
             TARGET="$INPUT_DATE"
           else
-            TARGET="$(date -u -d 'yesterday' +%Y-%m-%d)"
+            TARGET="$(TZ='Asia/Tokyo' date -d 'yesterday' +%Y-%m-%d)"
           fi
           echo "YESTERDAY=$TARGET" >> $GITHUB_ENV
           echo "MONTH_DIR=$(echo $TARGET | cut -d- -f1-2)" >> $GITHUB_ENV
