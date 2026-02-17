@@ -152,10 +152,11 @@ jobs:
           ## 2. ...
 
           ## ルール
-          - 10件以上を目標に収集
+          - 10件以上を目標に収集（不足時は不足を明記し、捏造しない）
           - 英語記事も日本語に翻訳して記載
           - 各ニュースにはソースURLを必ず含める
-          - ${{ env.YESTERDAY }} 以外の古い記事は除外
+          - 公開日が ${{ env.YESTERDAY }} と完全一致する記事のみ対象
+          - ${{ env.YESTERDAY }} より古い記事・新しい記事・日付不明記事・YYYY-MMのように日単位で確認できない記事は除外
           - web-search が使えない場合は webfetch のみで続行
           "
 
@@ -215,6 +216,19 @@ jobs:
           echo "=== Line counts ==="
           wc -l raw/*.md 2>/dev/null || echo "No files found"
 
+      - name: Prepare curation inputs
+        run: |
+          python3 scripts/prepare_curation_inputs.py \
+            --target-date "${{ env.YESTERDAY }}" \
+            --raw-dir raw \
+            --news-dir news \
+            --lookback-days 3 \
+            --recent-headlines-file _recent_headlines.md
+          echo "=== Prepared files ==="
+          ls -la raw/ 2>/dev/null || echo "No raw directory"
+          echo "=== Filtered line counts ==="
+          wc -l raw/*.md 2>/dev/null || echo "No files found"
+
       - name: "Curate: merge and rank all news"
         env:
           Z_AI_API_KEY: ${{ secrets.Z_AI_API_KEY }}
@@ -224,15 +238,19 @@ jobs:
 
           ## タスク
           raw/ ディレクトリに10カテゴリ分のニュース調査結果があります。
-          全ファイルを読み込み、重複を排除・重要度でランキングし、
+          全ファイルを読み込み、日付を厳密に検証したうえで重複を排除・重要度でランキングし、
           最終的なデイリーニュースレポートを作成してください。
 
           ## 手順
           1. raw/ 内の全 .md ファイルを bash の cat コマンドで読み込む
-          2. 重複記事を排除（同じニュースが異なるソースで報じられている場合は統合）
-          3. 重要度⭐⭐⭐を優先し、全体から上位15-25件を厳選
-          4. カテゴリ別に分類して最終レポートを作成
-          5. news/${{ env.MONTH_DIR }}/${{ env.YESTERDAY }}.md に書き出す
+             - raw/_recent_headlines.md は過去3日分の既出見出し一覧
+          2. 公開日が ${{ env.YESTERDAY }} と一致する記事だけを候補に残す
+             - 日付不明 / 日付が YYYY-MM までしかない記事 / 対象日より古い記事 / 対象日より新しい記事は除外
+          3. 同一ニュースの重複を排除（同じニュースが異なるソースで報じられている場合は統合）
+          4. raw/_recent_headlines.md にある見出しと同一・同義のニュースは除外（過去3日との重複回避）
+          5. 重要度⭐⭐⭐を優先し、全体から上位15-25件を厳選
+          6. カテゴリ別に分類して最終レポートを作成
+          7. news/${{ env.MONTH_DIR }}/${{ env.YESTERDAY }}.md に書き出す
 
           ## 出力フォーマット
 
@@ -249,6 +267,7 @@ jobs:
           | 項目 | 内容 |
           |------|------|
           | ソース | [メディア名](URL) |
+          | 公開日 | YYYY-MM-DD |
           | 重要度 | ⭐⭐⭐ |
 
           **概要**: ニュースの全体像を3-4文で説明。
@@ -291,6 +310,8 @@ jobs:
           - 調査カテゴリ数・記事数・掲載数を冒頭に記載
           - 全て日本語で記載
           - 各ニュースにはソースURLを必ず含める
+          - 各ニュースに公開日を必ず記載し、${{ env.YESTERDAY }} 以外は掲載しない
+          - raw/_recent_headlines.md にある見出しと重複するニュースは掲載しない
           - ファイルが既に存在する場合は上書きしない
           "
 
